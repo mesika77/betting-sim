@@ -1,11 +1,11 @@
-import { createClient } from '@supabase/supabase-js'
+import { neon } from '@neondatabase/serverless'
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+// Server-side only — DATABASE_URL is never exposed to the browser
+const sql = neon(process.env.DATABASE_URL!)
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey)
+export { sql }
 
-// TypeScript types for our tables
+// TypeScript types (keep the same as before)
 export interface Bet {
   id: string
   date: string

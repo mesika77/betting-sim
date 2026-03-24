@@ -8,7 +8,7 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from 'recharts'
-import { BankrollHistory } from '@/lib/supabase'
+import { BankrollHistory } from '@/lib/db'
 
 interface Props {
   data: BankrollHistory[]

@@ -1,3 +1,7 @@
+-- Schema for Neon PostgreSQL (previously Supabase)
+-- Run this in the Neon SQL Editor at console.neon.tech
+-- Note: RLS policies are not needed with Neon (dashboard uses server-side queries)
+
 -- bets table
 CREATE TABLE bets (
   id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -35,29 +39,6 @@ CREATE TABLE daily_summary (
   win_rate    NUMERIC(5,4),
   num_bets    INT
 );
-
--- Enable Row Level Security
-ALTER TABLE bets ENABLE ROW LEVEL SECURITY;
-ALTER TABLE bankroll_history ENABLE ROW LEVEL SECURITY;
-ALTER TABLE daily_summary ENABLE ROW LEVEL SECURITY;
-
--- RLS Policy: anon users can SELECT all rows from bets
-CREATE POLICY bets_select_anon ON bets
-  FOR SELECT
-  TO anon
-  USING (true);
-
--- RLS Policy: anon users can SELECT all rows from bankroll_history
-CREATE POLICY bankroll_history_select_anon ON bankroll_history
-  FOR SELECT
-  TO anon
-  USING (true);
-
--- RLS Policy: anon users can SELECT all rows from daily_summary
-CREATE POLICY daily_summary_select_anon ON daily_summary
-  FOR SELECT
-  TO anon
-  USING (true);
 
 -- Create indexes for performance
 CREATE INDEX idx_bets_date ON bets(date);

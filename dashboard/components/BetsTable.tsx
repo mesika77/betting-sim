@@ -1,5 +1,5 @@
 'use client'
-import { Bet } from '@/lib/supabase'
+import { Bet } from '@/lib/db'
 
 interface Props {
   bets: Bet[]

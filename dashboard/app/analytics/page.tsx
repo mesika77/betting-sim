@@ -1,6 +1,6 @@
 import { getAllBets, getBankrollHistory } from '@/lib/queries'
 import { KpiCard } from '@/components/KpiCard'
-import { Bet } from '@/lib/supabase'
+import { Bet } from '@/lib/db'
 
 interface SportStats {
   sport: string
