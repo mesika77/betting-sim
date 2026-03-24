@@ -6,12 +6,13 @@ Provides:
     fetch_same_day_odds()    -> list[dict]  (main entry point)
 """
 
-import os
 import time
 from datetime import datetime, timezone
 
 import requests
 from dotenv import load_dotenv
+
+from bot.config import get_api_key
 
 load_dotenv()
 
@@ -21,16 +22,9 @@ MARKET_KEYS = "h2h,spreads,totals"
 REGIONS = "eu,uk,us"
 
 
-def _get_api_key() -> str:
-    key = os.getenv("ODDS_API_KEY")
-    if not key:
-        raise ValueError("ODDS_API_KEY environment variable is not set")
-    return key
-
-
 def fetch_all_sports() -> list[str]:
     """GET /v4/sports/ and return a list of sport keys."""
-    key = _get_api_key()
+    key = get_api_key()
     url = f"{BASE_URL}sports/"
     params = {"apiKey": key, "all": "true"}
 
@@ -49,7 +43,7 @@ def fetch_all_sports() -> list[str]:
 
 def fetch_odds_for_sport(sport_key: str) -> list[dict]:
     """GET /v4/sports/{sport_key}/odds/ and return the raw list of event dicts."""
-    key = _get_api_key()
+    key = get_api_key()
     url = f"{BASE_URL}sports/{sport_key}/odds/"
     params = {
         "apiKey": key,

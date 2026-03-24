@@ -7,7 +7,7 @@ Usage:
 
 import asyncio
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 
 from telegram import Bot
 
@@ -32,7 +32,8 @@ def build_morning_message() -> str:
     bankroll = get_latest_bankroll()
     bets = get_today_bets()
 
-    today_str = datetime.utcnow().strftime("%B %-d, %Y")
+    now = datetime.now(tz=timezone.utc)
+    today_str = f"{now.strftime('%B')} {now.day}, {now.year}"
     num_bets = len(bets)
 
     # Count distinct sports
@@ -85,7 +86,8 @@ def build_evening_message() -> str:
     bets = get_today_bets()
     history = get_bankroll_history()
 
-    today_str = datetime.utcnow().strftime("%B %-d, %Y")
+    now = datetime.now(tz=timezone.utc)
+    today_str = f"{now.strftime('%B')} {now.day}, {now.year}"
 
     # Derive opening / closing bankroll from history
     opening = 0.0

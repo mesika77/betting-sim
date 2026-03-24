@@ -32,8 +32,8 @@ export function BankrollChart({ data }: Props) {
           dataKey="date"
           tick={{ fontSize: 12, fill: '#6b7280' }}
           tickFormatter={(val: string) => {
-            const d = new Date(val)
-            return `${d.getMonth() + 1}/${d.getDate()}`
+            const parts = (val as string).split('-')  // ["2026", "03", "23"]
+            return `${parseInt(parts[1])}/${parseInt(parts[2])}`
           }}
         />
         <YAxis

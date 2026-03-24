@@ -8,7 +8,7 @@ Run every morning by GitHub Actions to:
 5. Print summary to stdout (for GitHub Actions logs)
 """
 
-from datetime import date
+from datetime import datetime, timezone
 
 from bot.db import get_latest_bankroll, insert_bets
 from bot.fetch_odds import fetch_same_day_odds
@@ -86,7 +86,7 @@ def main():
     bets = apply_stakes(bets, bankroll)
 
     # Step 4: Prepare DB records
-    today = date.today().isoformat()
+    today = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d")
     db_records = [
         {
             "date": today,

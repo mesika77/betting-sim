@@ -79,7 +79,7 @@ def select_best_bets(
                         continue
 
                     key = (event_id, market_key, selection)
-                    if key not in best_odds or decimal_odds > best_odds[key]:
+                    if key not in best_odds or decimal_odds < best_odds[key]:
                         best_odds[key] = decimal_odds
                         meta[key] = (sport_key, event_name, date_str)
 

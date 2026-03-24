@@ -7,7 +7,7 @@ This module provides a thin interface to Supabase tables:
 """
 
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
@@ -141,7 +141,7 @@ def get_today_bets() -> list[dict]:
     """Return all bets for today (date == current date in UTC)."""
     try:
         client = _get_client()
-        today = datetime.utcnow().strftime("%Y-%m-%d")
+        today = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d")
 
         response = client.table("bets").select("*").eq("date", today).execute()
 
@@ -151,10 +151,17 @@ def get_today_bets() -> list[dict]:
 
 
 def get_pending_bets() -> list[dict]:
-    """Return all bets with result == 'pending'."""
+    """Return all bets with result == 'pending' for today (UTC)."""
     try:
+        today = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d")
         client = _get_client()
-        response = client.table("bets").select("*").eq("result", "pending").execute()
+        response = (
+            client.table("bets")
+            .select("*")
+            .eq("result", "pending")
+            .eq("date", today)
+            .execute()
+        )
 
         return response.data if response.data else []
     except Exception as e:

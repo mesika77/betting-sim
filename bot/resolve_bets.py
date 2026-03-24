@@ -10,12 +10,12 @@ Run every evening at 23:55 UTC by GitHub Actions to:
 7. Print a clear summary to stdout
 """
 
-import os
 from datetime import datetime, timezone
 
 import requests
 from dotenv import load_dotenv
 
+from bot.config import get_api_key
 from bot.db import (
     get_pending_bets,
     update_bet_result,
@@ -34,13 +34,6 @@ ORIGINAL_BANKROLL = 5000.00
 # API helpers
 # ---------------------------------------------------------------------------
 
-def _get_api_key() -> str:
-    key = os.getenv("ODDS_API_KEY")
-    if not key:
-        raise ValueError("ODDS_API_KEY environment variable is not set")
-    return key
-
-
 def fetch_scores(sport_key: str) -> list[dict]:
     """Fetch completed scores for a given sport key from The Odds API.
 
@@ -49,7 +42,7 @@ def fetch_scores(sport_key: str) -> list[dict]:
     Returns an empty list on any error (so caller can safely void bets).
     """
     try:
-        key = _get_api_key()
+        key = get_api_key()
     except ValueError as exc:
         print(f"[resolve_bets] ERROR — cannot fetch scores: {exc}")
         return []
@@ -256,9 +249,9 @@ def resolve_bet(bet: dict, scores_cache: dict[str, list[dict]]) -> tuple[str, fl
     elif is_h2h:
         winner = determine_h2h_winner(score_event)
         if winner is None:
-            # Draw or indeterminate — void
-            print(f"  [VOID] No h2h winner (draw or missing scores): '{event_name}'")
-            result = "void"
+            # Draw — h2h bets on either team are losers in a standard market
+            print(f"  [LOST] No h2h winner (draw): '{event_name}'")
+            result = "lost"
         elif _normalise(selection) == _normalise(winner):
             print(f"  [WON] '{selection}' won: '{event_name}'")
             result = "won"
