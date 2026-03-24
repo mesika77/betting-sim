@@ -8,6 +8,7 @@ Provides:
 
 import time
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 import requests
 from dotenv import load_dotenv
@@ -17,6 +18,8 @@ from bot.config import get_api_key
 load_dotenv()
 
 BASE_URL = "https://api.the-odds-api.com/v4/"
+
+IDT = ZoneInfo("Asia/Jerusalem")
 
 MARKET_KEYS = "h2h,spreads,totals"
 REGIONS = "eu,uk,us"
@@ -74,13 +77,13 @@ def fetch_same_day_odds() -> list[dict]:
 
     Returns a flat list of event dicts from The Odds API.
     """
-    # Determine today's local date and a local-time cutoff at 23:59
-    now_local = datetime.now()
-    today_local = now_local.date()
-    cutoff_local = now_local.replace(hour=23, minute=59, second=0, microsecond=0)
+    # "today" in Israel time
+    now_idt = datetime.now(tz=IDT)
+    today_idt = now_idt.date()
+    # Cutoff: only include events that start before 21:00 IDT
+    # so they can finish by 23:59 IDT (~2-3 hours for most sports)
+    cutoff_idt = datetime(today_idt.year, today_idt.month, today_idt.day, 21, 0, 0, tzinfo=IDT)
 
-    # We'll compare by converting the UTC commence_time to local time.
-    # Python's datetime.astimezone() uses the system's local timezone.
     try:
         sport_keys = fetch_all_sports()
     except ValueError as exc:
@@ -118,10 +121,10 @@ def fetch_same_day_odds() -> list[dict]:
                 )
                 continue
 
-            # Convert to local wall-clock time for date/cutoff comparison
-            commence_local = commence_utc.astimezone(tz=None).replace(tzinfo=None)
+            # Convert to IDT for date/cutoff comparison
+            commence_idt = commence_utc.astimezone(IDT)
 
-            if commence_local.date() == today_local and commence_local <= cutoff_local:
+            if commence_idt.date() == today_idt and commence_idt <= cutoff_idt:
                 all_events.append(event)
 
         time.sleep(0.1)

@@ -30,6 +30,7 @@ export function BetsTable({ bets, showDate }: Props) {
             {showDate && <th className="px-4 py-3">Date</th>}
             <th className="px-4 py-3">Sport</th>
             <th className="px-4 py-3">Event</th>
+            <th className="px-4 py-3">Kick-off (IDT)</th>
             <th className="px-4 py-3">Market</th>
             <th className="px-4 py-3">Selection</th>
             <th className="px-4 py-3 text-right">Odds</th>
@@ -65,6 +66,9 @@ export function BetsTable({ bets, showDate }: Props) {
                   {bet.sport}
                 </td>
                 <td className="px-4 py-3 text-gray-700 max-w-xs truncate">{bet.event_name}</td>
+                <td className="px-4 py-3 text-gray-600 whitespace-nowrap">
+                  {bet.commence_time || '—'}
+                </td>
                 <td className="px-4 py-3 text-gray-600 whitespace-nowrap">{bet.market}</td>
                 <td className="px-4 py-3 text-gray-700 whitespace-nowrap">{bet.selection}</td>
                 <td className="px-4 py-3 text-right font-mono text-gray-700">

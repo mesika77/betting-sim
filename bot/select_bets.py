@@ -19,6 +19,7 @@ def select_best_bets(
     events: list[dict],
     min_prob: float = 0.65,
     max_bets: int = 20,
+    min_odds: float = 1.05,
 ) -> list[dict]:
     """Rank and filter same-day events into a shortlist of best bets.
 
@@ -40,12 +41,12 @@ def select_best_bets(
     -------
     List of dicts, each with keys:
         event_id, sport, event_name, market, selection,
-        decimal_odds, implied_prob, date
+        decimal_odds, implied_prob, date, commence_time
     """
     # best_odds[(event_id, market_key, selection_name)] = max decimal_odds seen
     best_odds: dict[tuple[str, str, str], float] = {}
-    # meta[(event_id, market_key, selection_name)] = (sport_key, event_name, date_str)
-    meta: dict[tuple[str, str, str], tuple[str, str, str]] = {}
+    # meta[(event_id, market_key, selection_name)] = (sport_key, event_name, date_str, commence_time)
+    meta: dict[tuple[str, str, str], tuple[str, str, str, str]] = {}
 
     for event in events:
         event_id: str = event.get("id", "")
@@ -56,6 +57,7 @@ def select_best_bets(
 
         commence_raw: str = event.get("commence_time", "")
         date_str: str = _parse_date(commence_raw)
+        commence_time: str = commence_raw
 
         bookmakers: list[dict] = event.get("bookmakers", [])
         for bookmaker in bookmakers:
@@ -74,14 +76,16 @@ def select_best_bets(
                     except (TypeError, ValueError):
                         continue
 
-                    # Skip invalid odds
+                    # Skip invalid odds and suspiciously low-value bets
                     if decimal_odds <= 1.0:
+                        continue
+                    if decimal_odds < min_odds:
                         continue
 
                     key = (event_id, market_key, selection)
                     if key not in best_odds or decimal_odds < best_odds[key]:
                         best_odds[key] = decimal_odds
-                        meta[key] = (sport_key, event_name, date_str)
+                        meta[key] = (sport_key, event_name, date_str, commence_time)
 
     # Build candidate list, applying the min_prob filter
     candidates: list[dict] = []
@@ -90,7 +94,7 @@ def select_best_bets(
         if implied_prob < min_prob:
             continue
 
-        sport_key, event_name, date_str = meta[(event_id, market_key, selection)]
+        sport_key, event_name, date_str, commence_time = meta[(event_id, market_key, selection)]
         market_label = MARKET_LABELS.get(market_key, market_key)
 
         candidates.append(
@@ -103,6 +107,7 @@ def select_best_bets(
                 "decimal_odds": round(decimal_odds, 4),
                 "implied_prob": round(implied_prob, 6),
                 "date": date_str,
+                "commence_time": commence_time,
             }
         )
 

@@ -19,6 +19,7 @@ export interface Bet {
   stake: number
   result: 'pending' | 'won' | 'lost' | 'void'
   profit_loss: number | null
+  commence_time: string | null
   created_at: string
 }
 

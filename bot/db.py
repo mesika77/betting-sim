@@ -53,10 +53,10 @@ def insert_bets(bets: list[dict]) -> None:
                 cur,
                 """
                 INSERT INTO bets
-                    (date, sport, event_name, market, selection, decimal_odds, implied_prob, stake, result)
+                    (date, sport, event_name, market, selection, decimal_odds, implied_prob, stake, result, commence_time)
                 VALUES
                     (%(date)s, %(sport)s, %(event_name)s, %(market)s, %(selection)s,
-                     %(decimal_odds)s, %(implied_prob)s, %(stake)s, 'pending')
+                     %(decimal_odds)s, %(implied_prob)s, %(stake)s, 'pending', %(commence_time)s)
                 """,
                 bets,
             )

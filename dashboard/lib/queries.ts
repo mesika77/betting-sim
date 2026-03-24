@@ -9,6 +9,15 @@ function parseBet(row: Record<string, unknown>): Bet {
   return {
     ...row,
     date: toDateStr(row.date),
+    commence_time: row.commence_time
+      ? new Date(row.commence_time as string).toLocaleString('en-GB', {
+          timeZone: 'Asia/Jerusalem',
+          hour: '2-digit',
+          minute: '2-digit',
+          day: '2-digit',
+          month: '2-digit',
+        })
+      : null,
     decimal_odds: Number(row.decimal_odds),
     implied_prob: Number(row.implied_prob),
     stake: Number(row.stake),

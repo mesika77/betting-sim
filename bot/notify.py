@@ -8,8 +8,11 @@ Usage:
 import asyncio
 import os
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from telegram import Bot
+
+IDT = ZoneInfo("Asia/Jerusalem")
 
 
 # ── Telegram helpers ──────────────────────────────────────────────────────────
@@ -48,31 +51,31 @@ def build_morning_message() -> str:
     ]
 
     if bets:
-        # Top picks sorted by implied_prob desc, up to 5
+        # All picks sorted by implied_prob desc
         sorted_bets = sorted(
             bets,
             key=lambda b: float(b.get("implied_prob") or 0),
             reverse=True,
         )
-        top_picks = sorted_bets[:5]
-        remaining = num_bets - len(top_picks)
 
-        lines.append("")
-        lines.append("Top picks:")
-        for b in top_picks:
-            sport = b.get("sport", "")
-            event = b.get("event_name", "")
-            selection = b.get("selection", "")
-            odds = float(b.get("decimal_odds") or 0)
-            implied = float(b.get("implied_prob") or 0)
-            stake = float(b.get("stake") or 0)
-            lines.append(
-                f"- {sport}: {event} | {selection} @ {odds:.2f}"
-                f" | {implied * 100:.1f}% | ${stake:,.2f}"
+        bet_lines = []
+        for b in sorted_bets:
+            time_str = ""
+            if b.get("commence_time"):
+                try:
+                    ct = datetime.fromisoformat(str(b["commence_time"]).replace("Z", "+00:00"))
+                    time_str = f" [{ct.astimezone(IDT).strftime('%H:%M')}]"
+                except Exception:
+                    pass
+            bet_lines.append(
+                f"- {b['sport']}: {b['event_name']}{time_str} | {b['selection']} "
+                f"@ {float(b['decimal_odds']):.2f} | {float(b['implied_prob']):.1%} | ${float(b['stake']):,.2f}"
             )
 
-        if remaining > 0:
-            lines.append(f"...and {remaining} more bet{'s' if remaining != 1 else ''}")
+        bets_text = "\n".join(bet_lines)
+        lines.append("")
+        lines.append("All picks:")
+        lines.append(bets_text)
 
     lines.append("")
     lines.append("Results tonight at midnight.")

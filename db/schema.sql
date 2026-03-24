@@ -13,6 +13,7 @@ CREATE TABLE bets (
   decimal_odds   NUMERIC(6,3),
   implied_prob   NUMERIC(5,4),
   stake          NUMERIC(10,2),
+  commence_time  TIMESTAMPTZ,
   result         TEXT DEFAULT 'pending',   -- 'pending' | 'won' | 'lost' | 'void'
   profit_loss    NUMERIC(10,2),
   created_at     TIMESTAMPTZ DEFAULT now()

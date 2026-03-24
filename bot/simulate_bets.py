@@ -9,6 +9,7 @@ Run every morning by GitHub Actions to:
 """
 
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from bot.db import get_latest_bankroll, insert_bets
 from bot.fetch_odds import fetch_same_day_odds
@@ -86,7 +87,8 @@ def main():
     bets = apply_stakes(bets, bankroll)
 
     # Step 4: Prepare DB records
-    today = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d")
+    IDT = ZoneInfo("Asia/Jerusalem")
+    today = datetime.now(tz=IDT).strftime("%Y-%m-%d")
     db_records = [
         {
             "date": today,
@@ -97,6 +99,7 @@ def main():
             "decimal_odds": b["decimal_odds"],
             "implied_prob": b["implied_prob"],
             "stake": b["stake"],
+            "commence_time": b.get("commence_time"),  # ISO string UTC
         }
         for b in bets
     ]
