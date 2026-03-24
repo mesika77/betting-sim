@@ -46,6 +46,10 @@ SPORTS_WHITELIST = [
     "baseball_mlb",
     # Ice Hockey
     "icehockey_nhl",
+    "icehockey_ahl",
+    "icehockey_khl",
+    "icehockey_sweden_hockey_league",
+    "icehockey_finland_liiga",
 ]
 
 
