@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'
+
 import { getAllBets } from '@/lib/queries'
 import { BetsTable } from '@/components/BetsTable'
 

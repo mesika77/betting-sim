@@ -1,9 +1,10 @@
 import { neon } from '@neondatabase/serverless'
 
 // Server-side only — DATABASE_URL is never exposed to the browser
-const sql = neon(process.env.DATABASE_URL!)
-
-export { sql }
+// Lazy initialization so build doesn't fail without DATABASE_URL
+export function getSql() {
+  return neon(process.env.DATABASE_URL!)
+}
 
 // TypeScript types (keep the same as before)
 export interface Bet {

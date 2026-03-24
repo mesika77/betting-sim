@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'
+
 import { getBankrollHistory, getTodayBets } from '@/lib/queries'
 import { KpiCard } from '@/components/KpiCard'
 import { BankrollChart } from '@/components/BankrollChart'

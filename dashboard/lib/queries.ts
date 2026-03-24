@@ -1,11 +1,13 @@
-import { sql, Bet, BankrollHistory } from './db'
+import { getSql, Bet, BankrollHistory } from './db'
 
 export async function getAllBets(): Promise<Bet[]> {
+  const sql = getSql()
   const rows = await sql`SELECT * FROM bets ORDER BY date DESC, implied_prob DESC`
   return rows as Bet[]
 }
 
 export async function getTodayBets(): Promise<Bet[]> {
+  const sql = getSql()
   const today = new Date().toISOString().split('T')[0]
   const rows = await sql`
     SELECT * FROM bets
@@ -16,6 +18,7 @@ export async function getTodayBets(): Promise<Bet[]> {
 }
 
 export async function getBankrollHistory(): Promise<BankrollHistory[]> {
+  const sql = getSql()
   const rows = await sql`SELECT * FROM bankroll_history ORDER BY date ASC`
   return rows as BankrollHistory[]
 }

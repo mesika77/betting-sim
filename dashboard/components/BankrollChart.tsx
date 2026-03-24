@@ -43,7 +43,7 @@ export function BankrollChart({ data }: Props) {
         />
         <Tooltip
           formatter={(value) => [formatCurrency(Number(value ?? 0)), 'Bankroll']}
-          labelFormatter={(label: string) => `Date: ${label}`}
+          labelFormatter={(label) => `Date: ${label}`}
           contentStyle={{ borderRadius: '8px', border: '1px solid #e5e7eb' }}
         />
         <Line
