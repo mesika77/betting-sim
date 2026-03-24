@@ -1,8 +1,14 @@
 import { getSql, Bet, BankrollHistory } from './db'
 
+function toDateStr(val: unknown): string {
+  if (val instanceof Date) return val.toISOString().split('T')[0]
+  return String(val)
+}
+
 function parseBet(row: Record<string, unknown>): Bet {
   return {
     ...row,
+    date: toDateStr(row.date),
     decimal_odds: Number(row.decimal_odds),
     implied_prob: Number(row.implied_prob),
     stake: Number(row.stake),
@@ -13,6 +19,7 @@ function parseBet(row: Record<string, unknown>): Bet {
 function parseBankrollHistory(row: Record<string, unknown>): BankrollHistory {
   return {
     ...row,
+    date: toDateStr(row.date),
     opening_balance: Number(row.opening_balance),
     closing_balance: Number(row.closing_balance),
     daily_pl: Number(row.daily_pl),

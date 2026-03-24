@@ -31,8 +31,9 @@ export function BankrollChart({ data }: Props) {
         <XAxis
           dataKey="date"
           tick={{ fontSize: 12, fill: '#6b7280' }}
-          tickFormatter={(val: string) => {
-            const parts = (val as string).split('-')  // ["2026", "03", "23"]
+          tickFormatter={(val) => {
+            const str = val instanceof Date ? val.toISOString().split('T')[0] : String(val)
+            const parts = str.split('-')
             return `${parseInt(parts[1])}/${parseInt(parts[2])}`
           }}
         />
