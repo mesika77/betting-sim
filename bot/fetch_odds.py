@@ -24,6 +24,30 @@ IDT = ZoneInfo("Asia/Jerusalem")
 MARKET_KEYS = "h2h,spreads,totals"
 REGIONS = "eu,uk,us"
 
+# Whitelist of high-traffic sports — covers most daily games year-round.
+# ~12 requests per morning run instead of 80-120 (saves ~85% of API quota).
+# Add/remove sport keys as needed. Unknown keys are skipped gracefully.
+SPORTS_WHITELIST = [
+    # Soccer — top European leagues (daily Sept–May)
+    "soccer_epl",
+    "soccer_spain_la_liga",
+    "soccer_germany_bundesliga",
+    "soccer_italy_serie_a",
+    "soccer_france_ligue_one",
+    "soccer_uefa_champs_league",
+    "soccer_uefa_europa_league",
+    # Basketball
+    "basketball_nba",
+    "basketball_euroleague",
+    # Tennis
+    "tennis_atp_single_wimbledon",
+    "tennis_wta_single_wimbledon",
+    # Baseball
+    "baseball_mlb",
+    # Ice Hockey
+    "icehockey_nhl",
+]
+
 
 def fetch_all_sports() -> list[str]:
     """GET /v4/sports/ and return a list of sport keys."""
@@ -84,12 +108,8 @@ def fetch_same_day_odds() -> list[dict]:
     # so they can finish by 23:59 IDT (~2-3 hours for most sports)
     cutoff_idt = datetime(today_idt.year, today_idt.month, today_idt.day, 21, 0, 0, tzinfo=IDT)
 
-    try:
-        sport_keys = fetch_all_sports()
-    except ValueError as exc:
-        print(f"[fetch_odds] ERROR fetching sports list: {exc}")
-        return []
-
+    sport_keys = SPORTS_WHITELIST
+    print(f"[fetch_odds] Fetching odds for {len(sport_keys)} whitelisted sports.")
     all_events: list[dict] = []
 
     for sport_key in sport_keys:
