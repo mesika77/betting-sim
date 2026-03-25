@@ -1,6 +1,6 @@
 export const dynamic = 'force-dynamic'
 
-import { getBankrollHistory, getTodayBets } from '@/lib/queries'
+import { getBankrollHistory, getLatestDayBets } from '@/lib/queries'
 import { KpiCard } from '@/components/KpiCard'
 import { BankrollChart } from '@/components/BankrollChart'
 import { BetsTable } from '@/components/BetsTable'
@@ -8,7 +8,7 @@ import { BetsTable } from '@/components/BetsTable'
 export default async function OverviewPage() {
   const [history, todayBets] = await Promise.all([
     getBankrollHistory(),
-    getTodayBets(),
+    getLatestDayBets(),
   ])
 
   // Calculate KPIs
@@ -88,10 +88,10 @@ export default async function OverviewPage() {
         )}
       </div>
 
-      {/* Today's Bets */}
+      {/* Latest Day's Bets */}
       <div>
         <h2 className="text-lg font-semibold text-gray-800 mb-4">
-          Today&apos;s Bets
+          Latest Bets {todayBets.length > 0 && <span className="text-sm font-normal text-gray-400">({todayBets[0].date})</span>}
           {todayBets.length > 0 && (
             <span className="ml-2 text-sm font-normal text-gray-400">
               ({todayBets.length} bet{todayBets.length !== 1 ? 's' : ''})

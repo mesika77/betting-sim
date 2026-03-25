@@ -45,12 +45,12 @@ export async function getAllBets(): Promise<Bet[]> {
   return rows.map(parseBet)
 }
 
-export async function getTodayBets(): Promise<Bet[]> {
+export async function getLatestDayBets(): Promise<Bet[]> {
+  // Returns bets from the most recent betting day in the DB (not necessarily today)
   const sql = getSql()
-  const today = new Date().toISOString().split('T')[0]
   const rows = await sql`
     SELECT * FROM bets
-    WHERE date = ${today}
+    WHERE date = (SELECT MAX(date) FROM bets)
     ORDER BY implied_prob DESC
   `
   return rows.map(parseBet)

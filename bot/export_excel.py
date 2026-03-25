@@ -69,7 +69,7 @@ def _build_bets_sheet(ws, bets: list[dict]) -> None:
     for row_idx, bet in enumerate(bets, start=2):
         # Date
         raw_date = bet.get("date", "")
-        date_val = raw_date[:10] if raw_date else ""  # keep YYYY-MM-DD
+        date_val = str(raw_date)[:10] if raw_date else ""  # keep YYYY-MM-DD
         ws.cell(row=row_idx, column=1, value=date_val)
 
         ws.cell(row=row_idx, column=2, value=bet.get("sport", ""))

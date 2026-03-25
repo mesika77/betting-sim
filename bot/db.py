@@ -109,14 +109,10 @@ def get_today_bets() -> list[dict]:
 
 
 def get_pending_bets() -> list[dict]:
-    """Return all pending bets for today (UTC)."""
-    today = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d")
+    """Return all pending bets regardless of date — if pending, it needs resolving."""
     with _get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute(
-                "SELECT * FROM bets WHERE result = 'pending' AND date = %s",
-                (today,),
-            )
+            cur.execute("SELECT * FROM bets WHERE result = 'pending'")
             return [dict(row) for row in cur.fetchall()]
 
 
