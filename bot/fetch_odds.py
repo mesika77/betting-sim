@@ -1,13 +1,11 @@
-"""Fetch same-day odds from The Odds API.
+"""Fetch same-day odds from odds-api.io.
 
 Provides:
-    fetch_all_sports()       -> list[str]
-    fetch_odds_for_sport()   -> list[dict]
-    fetch_same_day_odds()    -> list[dict]  (main entry point)
+    fetch_same_day_odds() -> list[dict]  (main entry point)
 """
 
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import requests
@@ -17,144 +15,137 @@ from bot.config import get_api_key
 
 load_dotenv()
 
-BASE_URL = "https://api.the-odds-api.com/v4/"
+BASE_URL = "https://api.odds-api.io/v3"
+BOOKMAKERS = "1xbet,22Bet"
 
 IDT = ZoneInfo("Asia/Jerusalem")
 
-MARKET_KEYS = "h2h,spreads,totals"
-REGIONS = "eu,uk,us"
-
-# Whitelist of high-traffic sports — covers most daily games year-round.
-# ~12 requests per morning run instead of 80-120 (saves ~85% of API quota).
-# Add/remove sport keys as needed. Unknown keys are skipped gracefully.
+# Sport slugs for odds-api.io.
+# Each slug covers all leagues within that sport.
 SPORTS_WHITELIST = [
-    # Soccer — top European leagues (daily Sept–May)
-    "soccer_epl",
-    "soccer_spain_la_liga",
-    "soccer_germany_bundesliga",
-    "soccer_italy_serie_a",
-    "soccer_france_ligue_one",
-    "soccer_uefa_champs_league",
-    "soccer_uefa_europa_league",
-    # Basketball
-    "basketball_nba",
-    "basketball_euroleague",
-    # Tennis
-    "tennis_atp_single_wimbledon",
-    "tennis_wta_single_wimbledon",
-    # Baseball
-    "baseball_mlb",
-    # Ice Hockey
-    "icehockey_nhl",
-    "icehockey_ahl",
-    "icehockey_khl",
-    "icehockey_sweden_hockey_league",
-    "icehockey_finland_liiga",
+    "football",    # EPL, La Liga, Bundesliga, Serie A, Ligue 1, UCL, UEL, ...
+    "basketball",  # NBA, EuroLeague, ...
+    "tennis",      # ATP/WTA
+    "baseball",    # MLB
+    "ice-hockey",  # NHL, AHL, KHL, SHL, Liiga, ...
 ]
 
+# Hard cap on total odds API calls per morning run.
+# Free tier: 100 req/hour. Events list = 5 calls, so max 90 odds calls.
+MAX_EVENTS = 90
 
-def fetch_all_sports() -> list[str]:
-    """GET /v4/sports/ and return a list of sport keys."""
+
+def _get_events_for_sport(sport_slug: str, date_from: str, date_to: str) -> list[dict]:
+    """GET /events for a sport within a UTC date range."""
     key = get_api_key()
-    url = f"{BASE_URL}sports/"
-    params = {"apiKey": key, "all": "true"}
-
-    resp = requests.get(url, params=params, timeout=30)
-    if resp.status_code != 200:
-        raise ValueError(
-            f"Failed to fetch sports list: HTTP {resp.status_code} — {resp.text}"
+    try:
+        resp = requests.get(
+            f"{BASE_URL}/events",
+            params={"apiKey": key, "sport": sport_slug, "from": date_from, "to": date_to},
+            timeout=30,
         )
+    except requests.RequestException as exc:
+        print(f"[fetch_odds] WARNING — network error for '{sport_slug}': {exc}")
+        return []
 
-    remaining = resp.headers.get("x-requests-remaining", "unknown")
-    print(f"[fetch_odds] API quota remaining after sports list: {remaining}")
+    remaining = resp.headers.get("x-requests-remaining", "?")
+    if resp.status_code != 200:
+        print(
+            f"[fetch_odds] WARNING — HTTP {resp.status_code} for events '{sport_slug}': "
+            f"{resp.text[:200]}"
+        )
+        return []
 
-    sports = resp.json()
-    return [s["key"] for s in sports]
+    events = resp.json()
+    print(f"[fetch_odds] '{sport_slug}': {len(events)} events | quota remaining: {remaining}")
+    return events
 
 
-def fetch_odds_for_sport(sport_key: str) -> list[dict]:
-    """GET /v4/sports/{sport_key}/odds/ and return the raw list of event dicts."""
+def _get_odds_for_event(event_id: int) -> dict | None:
+    """GET /odds for a single event. Returns None on error."""
     key = get_api_key()
-    url = f"{BASE_URL}sports/{sport_key}/odds/"
-    params = {
-        "apiKey": key,
-        "regions": REGIONS,
-        "markets": MARKET_KEYS,
-        "oddsFormat": "decimal",
-        "dateFormat": "iso",
-    }
-
-    resp = requests.get(url, params=params, timeout=30)
-    if resp.status_code != 200:
-        raise ValueError(
-            f"HTTP {resp.status_code} for sport '{sport_key}' — {resp.text}"
+    try:
+        resp = requests.get(
+            f"{BASE_URL}/odds",
+            params={"apiKey": key, "eventId": event_id, "bookmakers": BOOKMAKERS},
+            timeout=30,
         )
+    except requests.RequestException as exc:
+        print(f"[fetch_odds] WARNING — network error for event {event_id}: {exc}")
+        return None
 
-    remaining = resp.headers.get("x-requests-remaining", "unknown")
-    print(f"[fetch_odds] API quota remaining after {sport_key}: {remaining}")
+    if resp.status_code != 200:
+        print(
+            f"[fetch_odds] WARNING — HTTP {resp.status_code} for event {event_id}: "
+            f"{resp.text[:200]}"
+        )
+        return None
 
     return resp.json()
 
 
 def fetch_same_day_odds() -> list[dict]:
-    """Fetch all same-day events across every active sport.
+    """Fetch all same-day events with odds across whitelisted sports.
 
-    Calls fetch_all_sports(), then fetch_odds_for_sport() for each sport.
-    Keeps only events whose commence_time falls on today's date (in the user's
-    local timezone) and is before 23:59 local time today.
-
-    Returns a flat list of event dicts from The Odds API.
+    Filters to events whose commence_time (in IDT) is today and before
+    the 21:00 IDT cutoff. Returns a flat list of event dicts enriched
+    with a 'bookmakers' key containing odds-api.io bookmaker/market data.
     """
-    # "today" in Israel time
     now_idt = datetime.now(tz=IDT)
     today_idt = now_idt.date()
-    # Cutoff: only include events that start before 21:00 IDT
-    # so they can finish by 23:59 IDT (~2-3 hours for most sports)
     cutoff_idt = datetime(today_idt.year, today_idt.month, today_idt.day, 21, 0, 0, tzinfo=IDT)
 
-    sport_keys = SPORTS_WHITELIST
-    print(f"[fetch_odds] Fetching odds for {len(sport_keys)} whitelisted sports.")
-    all_events: list[dict] = []
+    date_from = f"{today_idt.isoformat()}T00:00:00Z"
+    date_to = f"{today_idt.isoformat()}T23:59:59Z"
 
-    for sport_key in sport_keys:
+    print(f"[fetch_odds] Scanning {len(SPORTS_WHITELIST)} sports for {today_idt} (IDT cutoff: 21:00).")
+
+    # Step 1 — collect qualifying events across all sports
+    qualifying: list[dict] = []
+
+    for sport_slug in SPORTS_WHITELIST:
         try:
-            events = fetch_odds_for_sport(sport_key)
-        except ValueError as exc:
-            print(f"[fetch_odds] WARNING — skipping {sport_key}: {exc}")
+            events = _get_events_for_sport(sport_slug, date_from, date_to)
+        except Exception as exc:
+            print(f"[fetch_odds] WARNING — skipping '{sport_slug}': {exc}")
             time.sleep(0.1)
             continue
 
         for event in events:
-            commence_raw = event.get("commence_time", "")
-            if not commence_raw:
+            raw_date = event.get("date", "")
+            if not raw_date:
                 continue
-
-            # The Odds API returns ISO 8601 UTC strings ending in 'Z'.
-            # datetime.fromisoformat() in Python < 3.11 doesn't handle 'Z',
-            # so we normalise it to '+00:00'.
-            commence_str = commence_raw.replace("Z", "+00:00")
             try:
-                # Parse as timezone-aware UTC datetime
-                commence_utc = datetime.fromisoformat(commence_str)
-                if commence_utc.tzinfo is None:
-                    commence_utc = commence_utc.replace(tzinfo=timezone.utc)
+                commence_utc = datetime.fromisoformat(raw_date.replace("Z", "+00:00"))
             except ValueError:
-                print(
-                    f"[fetch_odds] WARNING — could not parse commence_time "
-                    f"'{commence_raw}' for event {event.get('id')}; skipping."
-                )
                 continue
-
-            # Convert to IDT for date/cutoff comparison
             commence_idt = commence_utc.astimezone(IDT)
-
             if commence_idt.date() == today_idt and commence_idt <= cutoff_idt:
-                all_events.append(event)
+                qualifying.append(event)
 
         time.sleep(0.1)
 
     print(
-        f"[fetch_odds] Fetched {len(all_events)} same-day events "
-        f"across {len(sport_keys)} sports."
+        f"[fetch_odds] {len(qualifying)} qualifying events. "
+        f"Fetching odds (cap: {MAX_EVENTS})..."
     )
+    qualifying = qualifying[:MAX_EVENTS]
+
+    # Step 2 — fetch odds per event
+    all_events: list[dict] = []
+    for event in qualifying:
+        event_id = event.get("id")
+        odds_data = _get_odds_for_event(event_id)
+        time.sleep(0.1)
+
+        if odds_data is None:
+            continue
+
+        bookmakers: dict = odds_data.get("bookmakers", {})
+        if not any(len(v) > 0 for v in bookmakers.values()):
+            continue  # no odds available for this event
+
+        all_events.append({**event, "bookmakers": bookmakers})
+
+    print(f"[fetch_odds] {len(all_events)} events with odds ready for selection.")
     return all_events

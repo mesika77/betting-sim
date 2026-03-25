@@ -1,13 +1,14 @@
 """Evening bet resolution script for betting-sim.
 
-Run every evening at 23:55 UTC by GitHub Actions to:
-1. Get today's pending bets from the DB
-2. Fetch scores from The Odds API for each relevant sport
+Uses the odds-api.io /events endpoint to fetch final scores.
+
+Run every evening at 23:55 IDT by GitHub Actions to:
+1. Get all pending bets from the DB
+2. Fetch completed event scores from odds-api.io
 3. Resolve each bet as won / lost / void
 4. Update each bet's result and profit_loss in the DB
-5. Calculate daily P&L
-6. Write bankroll_history and daily_summary records
-7. Print a clear summary to stdout
+5. Write bankroll_history and daily_summary records
+6. Print a clear summary to stdout
 """
 
 from datetime import datetime, timezone
@@ -26,55 +27,75 @@ from bot.db import (
 
 load_dotenv()
 
-BASE_URL = "https://api.the-odds-api.com/v4/"
+BASE_URL = "https://api.odds-api.io/v3"
 ORIGINAL_BANKROLL = 5000.00
+
+# Map legacy The Odds API sport keys → odds-api.io slugs (for any old unresolved bets)
+_LEGACY_TO_SLUG: dict[str, str] = {
+    "soccer_epl": "football",
+    "soccer_spain_la_liga": "football",
+    "soccer_germany_bundesliga": "football",
+    "soccer_italy_serie_a": "football",
+    "soccer_france_ligue_one": "football",
+    "soccer_uefa_champs_league": "football",
+    "soccer_uefa_europa_league": "football",
+    "basketball_nba": "basketball",
+    "basketball_euroleague": "basketball",
+    "tennis_atp_single_wimbledon": "tennis",
+    "tennis_wta_single_wimbledon": "tennis",
+    "baseball_mlb": "baseball",
+    "baseball_ncaa": "baseball",
+    "icehockey_nhl": "ice-hockey",
+    "icehockey_ahl": "ice-hockey",
+    "icehockey_khl": "ice-hockey",
+    "icehockey_sweden_hockey_league": "ice-hockey",
+    "icehockey_finland_liiga": "ice-hockey",
+    "icehockey_liiga": "ice-hockey",
+    "icehockey_sweden_allsvenskan": "ice-hockey",
+}
+
+_NEW_SLUGS = {"football", "basketball", "tennis", "baseball", "ice-hockey"}
 
 
 # ---------------------------------------------------------------------------
 # API helpers
 # ---------------------------------------------------------------------------
 
-def fetch_scores(sport_key: str) -> list[dict]:
-    """Fetch completed scores for a given sport key from The Odds API.
+def _to_sport_slug(sport_value: str) -> str:
+    """Convert a DB sport value (old key or new slug) to an odds-api.io slug."""
+    if sport_value in _NEW_SLUGS:
+        return sport_value
+    return _LEGACY_TO_SLUG.get(sport_value, sport_value)
 
-    Uses daysFrom=1 to capture scores from the last 24 hours.
 
-    Returns an empty list on any error (so caller can safely void bets).
-    """
+def fetch_scores_for_date(sport_slug: str, date_str: str) -> list[dict]:
+    """Fetch all events (with scores) for a sport on a given date (YYYY-MM-DD)."""
+    key = get_api_key()
     try:
-        key = get_api_key()
-    except ValueError as exc:
-        print(f"[resolve_bets] ERROR — cannot fetch scores: {exc}")
-        return []
-
-    url = f"{BASE_URL}sports/{sport_key}/scores/"
-    params = {
-        "apiKey": key,
-        "daysFrom": 1,
-        "dateFormat": "iso",
-    }
-
-    try:
-        resp = requests.get(url, params=params, timeout=30)
-    except requests.RequestException as exc:
-        print(f"[resolve_bets] WARNING — network error fetching scores for '{sport_key}': {exc}")
-        return []
-
-    remaining = resp.headers.get("x-requests-remaining", "unknown")
-    print(f"[resolve_bets] Scores fetched for '{sport_key}' | API quota remaining: {remaining}")
-
-    if resp.status_code != 200:
-        print(
-            f"[resolve_bets] WARNING — HTTP {resp.status_code} for sport '{sport_key}': "
-            f"{resp.text[:200]}"
+        resp = requests.get(
+            f"{BASE_URL}/events",
+            params={
+                "apiKey": key,
+                "sport": sport_slug,
+                "from": f"{date_str}T00:00:00Z",
+                "to": f"{date_str}T23:59:59Z",
+            },
+            timeout=30,
         )
+    except requests.RequestException as exc:
+        print(f"[resolve_bets] WARNING — network error for '{sport_slug}': {exc}")
         return []
 
-    try:
-        return resp.json()
-    except ValueError as exc:
-        print(f"[resolve_bets] WARNING — invalid JSON for sport '{sport_key}': {exc}")
+    remaining = resp.headers.get("x-requests-remaining", "?")
+    print(
+        f"[resolve_bets] Events fetched for '{sport_slug}' on {date_str} "
+        f"| quota remaining: {remaining}"
+    )
+    if resp.status_code != 200:
+        print(f"[resolve_bets] WARNING — HTTP {resp.status_code}: {resp.text[:200]}")
         return []
+
+    return resp.json()
 
 
 # ---------------------------------------------------------------------------
@@ -82,181 +103,117 @@ def fetch_scores(sport_key: str) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def _normalise(s: str) -> str:
-    """Lower-case and strip whitespace for fuzzy team-name comparison."""
     return s.strip().lower()
 
 
-def find_score_event(event_name: str, scores: list[dict]) -> dict | None:
-    """Find the score object whose home_team + away_team matches event_name.
-
-    event_name format: "Home Team vs Away Team"
-    score object format: {home_team, away_team, scores: [{name, score}], completed, ...}
-
-    Returns None if no match found.
-    """
-    # Parse event_name — be lenient about the separator
+def find_score_event(event_name: str, events: list[dict]) -> dict | None:
+    """Find the event whose home + away matches 'Home vs Away' event_name."""
+    lower = event_name.lower()
     sep = " vs "
-    if sep not in event_name:
-        # Try case-insensitive
-        lower = event_name.lower()
-        if " vs " not in lower:
-            return None
-        idx = lower.index(" vs ")
-        home_part = event_name[:idx]
-        away_part = event_name[idx + 4:]
-    else:
-        idx = event_name.index(sep)
-        home_part = event_name[:idx]
-        away_part = event_name[idx + len(sep):]
+    if sep not in lower:
+        return None
+    idx = lower.index(sep)
+    norm_home = _normalise(event_name[:idx])
+    norm_away = _normalise(event_name[idx + len(sep):])
 
-    norm_home = _normalise(home_part)
-    norm_away = _normalise(away_part)
-
-    for event in scores:
-        api_home = _normalise(event.get("home_team", ""))
-        api_away = _normalise(event.get("away_team", ""))
-        if api_home == norm_home and api_away == norm_away:
+    for event in events:
+        if (
+            _normalise(event.get("home", "")) == norm_home
+            and _normalise(event.get("away", "")) == norm_away
+        ):
             return event
-
     return None
 
 
-def _parse_scores(score_objects: list[dict]) -> dict[str, float]:
-    """Convert [{name, score}, ...] into {team_name: numeric_score}.
-
-    Skips entries with non-numeric or missing scores.
-    """
-    result: dict[str, float] = {}
-    for entry in score_objects or []:
-        name = entry.get("name", "")
-        raw = entry.get("score")
-        if raw is None:
-            continue
-        try:
-            result[name] = float(raw)
-        except (ValueError, TypeError):
-            pass
-    return result
-
-
 def determine_h2h_winner(score_event: dict) -> str | None:
-    """Return the winning team's name from a completed score event.
-
-    Returns None if scores are missing, incomplete, or a draw (no winner).
-    """
-    score_objects = score_event.get("scores") or []
-    scores = _parse_scores(score_objects)
-
-    if len(scores) < 2:
+    """Return winning team name, or None on draw / missing scores."""
+    scores = score_event.get("scores") or {}
+    try:
+        h = float(scores["home"])
+        a = float(scores["away"])
+    except (KeyError, TypeError, ValueError):
         return None
 
-    teams = list(scores.keys())
-    score_a = scores[teams[0]]
-    score_b = scores[teams[1]]
-
-    if score_a == score_b:
-        # Draw — no h2h winner
-        return None
-    return teams[0] if score_a > score_b else teams[1]
+    if h == a:
+        return None  # draw
+    return score_event["home"] if h > a else score_event["away"]
 
 
 def determine_totals_result(score_event: dict, selection: str) -> str:
-    """Determine won/lost for a totals (over/under) market.
-
-    Args:
-        score_event: The completed score dict from The Odds API.
-        selection: e.g. "Over 2.5" or "Under 47.5"
-
-    Returns 'won', 'lost', or 'void' if the selection cannot be parsed.
-    """
+    """Determine won/lost for a totals bet. Selection format: 'Over 5.5'."""
     parts = selection.strip().split()
     if len(parts) != 2:
         return "void"
-
     direction = parts[0].lower()
     try:
         line = float(parts[1])
     except ValueError:
         return "void"
-
     if direction not in ("over", "under"):
         return "void"
 
-    score_objects = score_event.get("scores") or []
-    scores = _parse_scores(score_objects)
-
-    if not scores:
+    scores = score_event.get("scores") or {}
+    try:
+        total = float(scores["home"]) + float(scores["away"])
+    except (KeyError, TypeError, ValueError):
         return "void"
-
-    total = sum(scores.values())
 
     if direction == "over":
         return "won" if total > line else "lost"
-    else:  # under
-        return "won" if total < line else "lost"
+    return "won" if total < line else "lost"
 
 
 # ---------------------------------------------------------------------------
 # Bet resolution
 # ---------------------------------------------------------------------------
 
-def resolve_bet(bet: dict, scores_cache: dict[str, list[dict]]) -> tuple[str, float]:
-    """Resolve a single bet and return (result, profit_loss).
-
-    Args:
-        bet: A bet dict from the DB.
-        scores_cache: Mutable dict mapping sport_key -> list of score objects.
-                      This function will populate missing entries.
-
-    Returns:
-        (result, profit_loss) where result is 'won', 'lost', or 'void'.
-    """
-    sport_key = bet.get("sport", "")
+def resolve_bet(bet: dict, scores_cache: dict) -> tuple[str, float]:
+    """Resolve a single bet. scores_cache: {(sport_slug, date_str): [events]}"""
+    sport_slug = _to_sport_slug(bet.get("sport", ""))
     event_name = bet.get("event_name", "")
     market = bet.get("market", "").lower()
     selection = bet.get("selection", "")
     decimal_odds = float(bet.get("decimal_odds", 1.0))
     stake = float(bet.get("stake", 0.0))
 
-    # Fetch scores for this sport (cached)
-    if sport_key not in scores_cache:
-        scores_cache[sport_key] = fetch_scores(sport_key)
+    bet_date = str(bet.get("date", ""))[:10]
+    cache_key = (sport_slug, bet_date)
 
-    scores = scores_cache[sport_key]
+    if cache_key not in scores_cache:
+        scores_cache[cache_key] = fetch_scores_for_date(sport_slug, bet_date)
 
-    # Find the matching event
-    score_event = find_score_event(event_name, scores)
+    events = scores_cache[cache_key]
+    score_event = find_score_event(event_name, events)
 
     if score_event is None:
-        print(f"  [VOID] Event not found in scores: '{event_name}' ({sport_key})")
+        print(f"  [VOID] Event not found in scores: '{event_name}' ({sport_slug})")
         return "void", 0.0
 
-    if not score_event.get("completed", False):
-        print(f"  [VOID] Event not yet completed: '{event_name}'")
+    if score_event.get("status") != "finished":
+        print(
+            f"  [VOID] Event not yet finished "
+            f"(status={score_event.get('status', '?')}): '{event_name}'"
+        )
         return "void", 0.0
 
-    # Market-specific resolution
-    # Normalise market label — The Odds API uses "Match Winner" for h2h in some regions
-    is_h2h = "h2h" in market or "match winner" in market
+    is_h2h = "match winner" in market or "h2h" in market
     is_totals = "total" in market or "over/under" in market
     is_spreads = "spread" in market or "handicap" in market
 
     if is_spreads:
-        # Spreads are complex to resolve accurately — void for safety
-        print(f"  [VOID] Spreads market not resolved (voided for safety): '{event_name}'")
+        print(f"  [VOID] Spreads market not resolved: '{event_name}'")
         result = "void"
 
     elif is_h2h:
         winner = determine_h2h_winner(score_event)
         if winner is None:
-            # Draw — h2h bets on either team are losers in a standard market
             print(f"  [LOST] No h2h winner (draw): '{event_name}'")
             result = "lost"
         elif _normalise(selection) == _normalise(winner):
             print(f"  [WON] '{selection}' won: '{event_name}'")
             result = "won"
         else:
-            print(f"  [LOST] '{selection}' lost (winner was '{winner}'): '{event_name}'")
+            print(f"  [LOST] '{selection}' lost (winner: '{winner}'): '{event_name}'")
             result = "lost"
 
     elif is_totals:
@@ -264,16 +221,14 @@ def resolve_bet(bet: dict, scores_cache: dict[str, list[dict]]) -> tuple[str, fl
         print(f"  [{result.upper()}] Totals '{selection}': '{event_name}'")
 
     else:
-        # Unknown market — void
         print(f"  [VOID] Unrecognised market '{market}': '{event_name}'")
         result = "void"
 
-    # Calculate profit/loss
     if result == "won":
         profit_loss = round(stake * (decimal_odds - 1), 2)
     elif result == "lost":
         profit_loss = round(-stake, 2)
-    else:  # void
+    else:
         profit_loss = 0.0
 
     return result, profit_loss
@@ -289,17 +244,14 @@ def main() -> None:
     print(f"[resolve_bets] Starting evening resolution — {today} UTC")
     print("=" * 60)
 
-    # Step 1: Get pending bets
     pending_bets = get_pending_bets()
-
     if not pending_bets:
         print("[resolve_bets] No pending bets found. Nothing to resolve. Exiting cleanly.")
         return
 
     print(f"[resolve_bets] Found {len(pending_bets)} pending bet(s) to resolve.\n")
 
-    # Step 2 & 3: Fetch scores and resolve each bet
-    scores_cache: dict[str, list[dict]] = {}
+    scores_cache: dict = {}
     resolved_bets: list[dict] = []
 
     for bet in pending_bets:
@@ -316,20 +268,16 @@ def main() -> None:
 
         result, profit_loss = resolve_bet(bet, scores_cache)
 
-        # Step 4: Update the DB
         try:
             update_bet_result(bet_id, result, profit_loss)
         except Exception as exc:
-            print(f"  [ERROR] Failed to update bet {bet_id} in DB: {exc}")
-            # Still record the resolution locally for summary calculation
-            # but mark it as void to be conservative with bankroll math
+            print(f"  [ERROR] Failed to update bet {bet_id}: {exc}")
             result = "void"
             profit_loss = 0.0
 
         resolved_bets.append({**bet, "result": result, "profit_loss": profit_loss})
         print()
 
-    # Step 5: Calculate daily stats
     won_bets = [b for b in resolved_bets if b["result"] == "won"]
     lost_bets = [b for b in resolved_bets if b["result"] == "lost"]
     void_bets = [b for b in resolved_bets if b["result"] == "void"]
@@ -339,7 +287,6 @@ def main() -> None:
     closing_balance = round(opening_balance + daily_pl, 2)
     win_rate = len(won_bets) / max(len(won_bets) + len(lost_bets), 1)
 
-    # Step 6: Write bankroll_history and daily_summary
     try:
         insert_bankroll_history({
             "date": today,
@@ -367,7 +314,6 @@ def main() -> None:
     except Exception as exc:
         print(f"[resolve_bets] ERROR writing daily_summary: {exc}")
 
-    # Step 7: Print summary
     print()
     print("=" * 60)
     print(f"  DAILY RESOLUTION SUMMARY — {today}")
@@ -380,8 +326,7 @@ def main() -> None:
     print(f"  Daily P&L     : ${daily_pl:+,.2f}")
     print(f"  Opening bal.  : ${opening_balance:,.2f}")
     print(f"  Closing bal.  : ${closing_balance:,.2f}")
-    print(f"  Total P&L     : ${closing_balance - ORIGINAL_BANKROLL:+,.2f}  "
-          f"(vs original ${ORIGINAL_BANKROLL:,.2f})")
+    print(f"  Total P&L     : ${closing_balance - ORIGINAL_BANKROLL:+,.2f}")
     print("=" * 60)
 
     if won_bets:
