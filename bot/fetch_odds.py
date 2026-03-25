@@ -4,6 +4,7 @@ Provides:
     fetch_same_day_odds() -> list[dict]  (main entry point)
 """
 
+import math
 import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -17,6 +18,7 @@ load_dotenv()
 
 BASE_URL = "https://api.odds-api.io/v3"
 BOOKMAKERS = "1xbet,22Bet"
+MULTI_BATCH_SIZE = 10  # /odds/multi supports up to 10 events per call
 
 IDT = ZoneInfo("Asia/Jerusalem")
 
@@ -29,10 +31,6 @@ SPORTS_WHITELIST = [
     "baseball",    # MLB
     "ice-hockey",  # NHL, AHL, KHL, SHL, Liiga, ...
 ]
-
-# Hard cap on total odds API calls per morning run.
-# Free tier: 100 req/hour. Events list = 5 calls, so max 90 odds calls.
-MAX_EVENTS = 90
 
 
 def _get_events_for_sport(sport_slug: str, date_from: str, date_to: str) -> list[dict]:
@@ -48,7 +46,6 @@ def _get_events_for_sport(sport_slug: str, date_from: str, date_to: str) -> list
         print(f"[fetch_odds] WARNING — network error for '{sport_slug}': {exc}")
         return []
 
-    remaining = resp.headers.get("x-requests-remaining", "?")
     if resp.status_code != 200:
         print(
             f"[fetch_odds] WARNING — HTTP {resp.status_code} for events '{sport_slug}': "
@@ -57,39 +54,52 @@ def _get_events_for_sport(sport_slug: str, date_from: str, date_to: str) -> list
         return []
 
     events = resp.json()
+    remaining = resp.headers.get("x-requests-remaining", "?")
     print(f"[fetch_odds] '{sport_slug}': {len(events)} events | quota remaining: {remaining}")
     return events
 
 
-def _get_odds_for_event(event_id: int) -> dict | None:
-    """GET /odds for a single event. Returns None on error."""
+def _get_odds_batch(event_ids: list[int]) -> list[dict]:
+    """GET /odds/multi for up to 10 events at once."""
     key = get_api_key()
     try:
         resp = requests.get(
-            f"{BASE_URL}/odds",
-            params={"apiKey": key, "eventId": event_id, "bookmakers": BOOKMAKERS},
+            f"{BASE_URL}/odds/multi",
+            params={
+                "apiKey": key,
+                "eventIds": ",".join(str(i) for i in event_ids),
+                "bookmakers": BOOKMAKERS,
+            },
             timeout=30,
         )
     except requests.RequestException as exc:
-        print(f"[fetch_odds] WARNING — network error for event {event_id}: {exc}")
-        return None
+        print(f"[fetch_odds] WARNING — network error for odds/multi batch: {exc}")
+        return []
 
     if resp.status_code != 200:
         print(
-            f"[fetch_odds] WARNING — HTTP {resp.status_code} for event {event_id}: "
+            f"[fetch_odds] WARNING — HTTP {resp.status_code} for odds/multi: "
             f"{resp.text[:200]}"
         )
-        return None
+        return []
 
-    return resp.json()
+    data = resp.json()
+    remaining = resp.headers.get("x-requests-remaining", "?")
+    print(f"[fetch_odds] odds/multi ({len(event_ids)} events) | quota remaining: {remaining}")
+    return data if isinstance(data, list) else []
 
 
 def fetch_same_day_odds() -> list[dict]:
     """Fetch all same-day events with odds across whitelisted sports.
 
-    Filters to events whose commence_time (in IDT) is today and before
-    the 21:00 IDT cutoff. Returns a flat list of event dicts enriched
-    with a 'bookmakers' key containing odds-api.io bookmaker/market data.
+    Uses /odds/multi (10 events per API call) to cover ALL qualifying events
+    within the 100 req/hour free tier budget:
+      - 5 events list calls (1 per sport)
+      - ceil(N/10) batch odds calls for N qualifying events
+    Even on busy days with 600+ events, this stays under 70 total calls.
+
+    Returns a list of event dicts enriched with a 'bookmakers' key
+    containing the odds-api.io bookmakers/odds structure.
     """
     now_idt = datetime.now(tz=IDT)
     today_idt = now_idt.date()
@@ -125,27 +135,34 @@ def fetch_same_day_odds() -> list[dict]:
 
         time.sleep(0.1)
 
+    num_batches = math.ceil(len(qualifying) / MULTI_BATCH_SIZE) if qualifying else 0
     print(
         f"[fetch_odds] {len(qualifying)} qualifying events. "
-        f"Fetching odds (cap: {MAX_EVENTS})..."
+        f"Fetching odds in {num_batches} batches..."
     )
-    qualifying = qualifying[:MAX_EVENTS]
 
-    # Step 2 — fetch odds per event
-    all_events: list[dict] = []
-    for event in qualifying:
-        event_id = event.get("id")
-        odds_data = _get_odds_for_event(event_id)
+    # Step 2 — fetch odds in batches of 10 via /odds/multi
+    event_meta: dict[int, dict] = {e["id"]: e for e in qualifying}
+    event_ids = list(event_meta.keys())
+    odds_by_id: dict[int, dict] = {}
+
+    for i in range(num_batches):
+        batch = event_ids[i * MULTI_BATCH_SIZE:(i + 1) * MULTI_BATCH_SIZE]
+        results = _get_odds_batch(batch)
+        for item in results:
+            eid = item.get("id")
+            if eid is not None:
+                odds_by_id[eid] = item.get("bookmakers", {})
         time.sleep(0.1)
 
-        if odds_data is None:
-            continue
-
-        bookmakers: dict = odds_data.get("bookmakers", {})
+    # Step 3 — merge odds back, keep only events that have at least some odds
+    all_events: list[dict] = []
+    for eid, bookmakers in odds_by_id.items():
         if not any(len(v) > 0 for v in bookmakers.values()):
-            continue  # no odds available for this event
-
-        all_events.append({**event, "bookmakers": bookmakers})
+            continue
+        event = event_meta.get(eid)
+        if event:
+            all_events.append({**event, "bookmakers": bookmakers})
 
     print(f"[fetch_odds] {len(all_events)} events with odds ready for selection.")
     return all_events
