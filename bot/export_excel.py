@@ -123,7 +123,7 @@ def _build_daily_summary_sheet(ws, history: list[dict]) -> None:
 
     for row_idx, record in enumerate(history, start=2):
         raw_date = record.get("date", "")
-        date_val = raw_date[:10] if raw_date else ""
+        date_val = str(raw_date)[:10] if raw_date else ""
         ws.cell(row=row_idx, column=1, value=date_val)
 
         bankroll = record.get("closing_balance")
