@@ -108,6 +108,17 @@ def get_today_bets() -> list[dict]:
             return [dict(row) for row in cur.fetchall()]
 
 
+def get_latest_bets() -> list[dict]:
+    """Return all bets from the most recent betting day in the DB."""
+    with _get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT * FROM bets WHERE date = (SELECT MAX(date) FROM bets) "
+                "ORDER BY implied_prob DESC"
+            )
+            return [dict(row) for row in cur.fetchall()]
+
+
 def get_pending_bets() -> list[dict]:
     """Return all pending bets regardless of date — if pending, it needs resolving."""
     with _get_conn() as conn:
