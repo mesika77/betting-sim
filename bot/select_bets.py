@@ -66,7 +66,13 @@ def select_best_bets(
                 market_key: str = market.get("key", "")
                 outcomes: list[dict] = market.get("outcomes", [])
                 for outcome in outcomes:
-                    selection: str = outcome.get("name", "")
+                    name: str = outcome.get("name", "")
+                    # For totals markets, append the line (e.g. "Over" → "Over 5.5")
+                    point = outcome.get("point")
+                    if market_key == "totals" and point is not None:
+                        selection = f"{name} {point}"
+                    else:
+                        selection = name
                     price = outcome.get("price")
 
                     if price is None:
