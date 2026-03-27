@@ -23,14 +23,31 @@ MULTI_BATCH_SIZE = 10  # /odds/multi supports up to 10 events per call
 IDT = ZoneInfo("Asia/Jerusalem")
 
 # Sport slugs for odds-api.io.
-# Each slug covers all leagues within that sport.
+# Only sports where at least one league can be resolved via ESPN are included.
 SPORTS_WHITELIST = [
-    "football",    # EPL, La Liga, Bundesliga, Serie A, Ligue 1, UCL, UEL, ...
-    "basketball",  # NBA, EuroLeague, ...
-    "tennis",      # ATP/WTA
+    "football",    # EPL, La Liga, Bundesliga, Serie A, Ligue 1, UCL, UEL
+    "basketball",  # NBA
     "baseball",    # MLB
-    "ice-hockey",  # NHL, AHL, KHL, SHL, Liiga, ...
+    "ice-hockey",  # NHL
+    # tennis excluded — ESPN has no coverage, all tennis bets void
 ]
+
+# Keywords matched (case-insensitive) against the event's league.name.
+# Events whose league name contains none of the keywords are skipped.
+_RESOLVABLE_LEAGUE_KEYWORDS: dict[str, list[str]] = {
+    "football": [
+        "premier league",
+        "la liga",
+        "bundesliga",
+        "serie a",
+        "ligue 1",
+        "champions league",
+        "europa league",
+    ],
+    "basketball": ["nba"],
+    "baseball": ["mlb"],
+    "ice-hockey": ["nhl"],
+}
 
 
 def _get_events_for_sport(sport_slug: str, date_from: str, date_to: str) -> list[dict]:
@@ -121,6 +138,7 @@ def fetch_same_day_odds() -> list[dict]:
             time.sleep(0.1)
             continue
 
+        keywords = _RESOLVABLE_LEAGUE_KEYWORDS.get(sport_slug, [])
         for event in events:
             raw_date = event.get("date", "")
             if not raw_date:
@@ -130,8 +148,12 @@ def fetch_same_day_odds() -> list[dict]:
             except ValueError:
                 continue
             commence_idt = commence_utc.astimezone(IDT)
-            if commence_idt.date() == today_idt and commence_idt <= cutoff_idt:
-                qualifying.append(event)
+            if not (commence_idt.date() == today_idt and commence_idt <= cutoff_idt):
+                continue
+            league_name = event.get("league", {}).get("name", "").lower()
+            if keywords and not any(kw in league_name for kw in keywords):
+                continue  # league not covered by ESPN — skip
+            qualifying.append(event)
 
         time.sleep(0.1)
 
