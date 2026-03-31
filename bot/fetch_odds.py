@@ -13,6 +13,7 @@ import requests
 from dotenv import load_dotenv
 
 from bot.config import get_api_key
+from bot.espn import ESPN_ENDPOINTS, fetch_scores_for_date, find_score_event
 
 load_dotenv()
 
@@ -23,7 +24,7 @@ MULTI_BATCH_SIZE = 10  # /odds/multi supports up to 10 events per call
 IDT = ZoneInfo("Asia/Jerusalem")
 
 # Sport slugs for odds-api.io.
-# Only sports where at least one league can be resolved via ESPN are included.
+# Only sports with ESPN coverage are included.
 SPORTS_WHITELIST = [
     "football",    # EPL, La Liga, Bundesliga, Serie A, Ligue 1, UCL, UEL
     "basketball",  # NBA
@@ -31,23 +32,6 @@ SPORTS_WHITELIST = [
     "ice-hockey",  # NHL
     # tennis excluded — ESPN has no coverage, all tennis bets void
 ]
-
-# Keywords matched (case-insensitive) against the event's league.name.
-# Events whose league name contains none of the keywords are skipped.
-_RESOLVABLE_LEAGUE_KEYWORDS: dict[str, list[str]] = {
-    "football": [
-        "premier league",
-        "la liga",
-        "bundesliga",
-        "serie a",
-        "ligue 1",
-        "champions league",
-        "europa league",
-    ],
-    "basketball": ["nba"],
-    "baseball": ["mlb"],
-    "ice-hockey": ["nhl"],
-}
 
 
 def _get_events_for_sport(sport_slug: str, date_from: str, date_to: str) -> list[dict]:
@@ -109,23 +93,31 @@ def _get_odds_batch(event_ids: list[int]) -> list[dict]:
 def fetch_same_day_odds() -> list[dict]:
     """Fetch all same-day events with odds across whitelisted sports.
 
-    Uses /odds/multi (10 events per API call) to cover ALL qualifying events
-    within the 100 req/hour free tier budget:
-      - 5 events list calls (1 per sport)
-      - ceil(N/10) batch odds calls for N qualifying events
-    Even on busy days with 600+ events, this stays under 70 total calls.
+    Only events that can be found in ESPN's schedule are included — this
+    guarantees every bet placed can be resolved in the evening run.
 
-    Returns a list of event dicts enriched with a 'bookmakers' key
-    containing the odds-api.io bookmakers/odds structure.
+    Uses /odds/multi (10 events per API call) to cover ALL qualifying events
+    within the 100 req/hour free tier budget.
     """
     now_idt = datetime.now(tz=IDT)
     today_idt = now_idt.date()
+    today_str = today_idt.isoformat()  # "YYYY-MM-DD"
     cutoff_idt = datetime(today_idt.year, today_idt.month, today_idt.day, 21, 0, 0, tzinfo=IDT)
 
-    date_from = f"{today_idt.isoformat()}T00:00:00Z"
-    date_to = f"{today_idt.isoformat()}T23:59:59Z"
+    date_from = f"{today_str}T00:00:00Z"
+    date_to = f"{today_str}T23:59:59Z"
 
     print(f"[fetch_odds] Scanning {len(SPORTS_WHITELIST)} sports for {today_idt} (IDT cutoff: 21:00).")
+
+    # Pre-fetch ESPN schedules for today so we can validate events up-front.
+    # This ensures we only bet on games ESPN can resolve in the evening.
+    print(f"[fetch_odds] Pre-fetching ESPN schedules for {today_str}...")
+    espn_today: dict[str, list[dict]] = {}
+    for sport_slug in SPORTS_WHITELIST:
+        if ESPN_ENDPOINTS.get(sport_slug):
+            espn_today[sport_slug] = fetch_scores_for_date(
+                sport_slug, today_str, log_prefix="[fetch_odds]"
+            )
 
     # Step 1 — collect qualifying events across all sports
     qualifying: list[dict] = []
@@ -138,7 +130,8 @@ def fetch_same_day_odds() -> list[dict]:
             time.sleep(0.1)
             continue
 
-        keywords = _RESOLVABLE_LEAGUE_KEYWORDS.get(sport_slug, [])
+        espn_events = espn_today.get(sport_slug, [])
+
         for event in events:
             raw_date = event.get("date", "")
             if not raw_date:
@@ -150,9 +143,15 @@ def fetch_same_day_odds() -> list[dict]:
             commence_idt = commence_utc.astimezone(IDT)
             if not (commence_idt.date() == today_idt and commence_idt <= cutoff_idt):
                 continue
-            league_name = event.get("league", {}).get("name", "").lower()
-            if keywords and not any(kw in league_name for kw in keywords):
-                continue  # league not covered by ESPN — skip
+
+            # Only include events ESPN can resolve — skip anything not in their schedule
+            home: str = event.get("home", "")
+            away: str = event.get("away", "")
+            event_name = f"{home} vs {away}"
+            if not find_score_event(event_name, espn_events):
+                print(f"[fetch_odds] Skipping '{event_name}' — not in ESPN coverage")
+                continue
+
             qualifying.append(event)
 
         time.sleep(0.1)

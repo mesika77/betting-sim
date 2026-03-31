@@ -13,7 +13,6 @@ Run every evening at 23:55 IDT by GitHub Actions to:
 
 from datetime import datetime, timezone
 
-import requests
 from dotenv import load_dotenv
 
 from bot.db import (
@@ -23,35 +22,17 @@ from bot.db import (
     upsert_daily_summary,
     get_latest_bankroll,
 )
+from bot.espn import (
+    fetch_scores_for_date,
+    find_score_event,
+    _names_match,
+    determine_h2h_winner,
+    determine_totals_result,
+)
 
 load_dotenv()
 
 ORIGINAL_BANKROLL = 5000.00
-ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports"
-
-# Map sport slug → list of ESPN (sport, league) tuples to query.
-# EuroLeague, KHL, SHL, AHL, and tennis are not on ESPN scoreboard — those bets void.
-ESPN_ENDPOINTS: dict[str, list[tuple[str, str]]] = {
-    "football": [
-        ("soccer", "eng.1"),          # EPL
-        ("soccer", "esp.1"),          # La Liga
-        ("soccer", "ger.1"),          # Bundesliga
-        ("soccer", "ita.1"),          # Serie A
-        ("soccer", "fra.1"),          # Ligue 1
-        ("soccer", "uefa.champions"), # UCL
-        ("soccer", "uefa.europa"),    # UEL
-    ],
-    "basketball": [
-        ("basketball", "nba"),
-    ],
-    "baseball": [
-        ("baseball", "mlb"),
-    ],
-    "ice-hockey": [
-        ("hockey", "nhl"),
-    ],
-    "tennis": [],  # ESPN scoreboard does not cover tennis
-}
 
 # Map legacy The Odds API sport keys → slugs (for any old unresolved bets)
 _LEGACY_TO_SLUG: dict[str, str] = {
@@ -80,155 +61,11 @@ _LEGACY_TO_SLUG: dict[str, str] = {
 _NEW_SLUGS = {"football", "basketball", "tennis", "baseball", "ice-hockey"}
 
 
-# ---------------------------------------------------------------------------
-# API helpers
-# ---------------------------------------------------------------------------
-
 def _to_sport_slug(sport_value: str) -> str:
     """Convert a DB sport value (old key or new slug) to a sport slug."""
     if sport_value in _NEW_SLUGS:
         return sport_value
     return _LEGACY_TO_SLUG.get(sport_value, sport_value)
-
-
-def _fetch_espn_scoreboard(sport: str, league: str, date_str: str) -> list[dict]:
-    """Fetch one ESPN scoreboard endpoint and return normalised event dicts."""
-    url = f"{ESPN_BASE}/{sport}/{league}/scoreboard"
-    try:
-        resp = requests.get(url, params={"dates": date_str.replace("-", "")}, timeout=15)
-    except requests.RequestException as exc:
-        print(f"[resolve_bets] WARNING — ESPN network error ({sport}/{league}): {exc}")
-        return []
-
-    if resp.status_code != 200:
-        print(f"[resolve_bets] WARNING — ESPN HTTP {resp.status_code} ({sport}/{league})")
-        return []
-
-    normalised: list[dict] = []
-    for ev in resp.json().get("events", []):
-        competitions = ev.get("competitions", [])
-        if not competitions:
-            continue
-        competitors = competitions[0].get("competitors", [])
-
-        home_name = away_name = home_score = away_score = None
-        for c in competitors:
-            name = c.get("team", {}).get("displayName", "")
-            score = c.get("score")
-            if c.get("homeAway") == "home":
-                home_name, home_score = name, score
-            elif c.get("homeAway") == "away":
-                away_name, away_score = name, score
-
-        if not home_name or not away_name:
-            continue
-
-        completed = ev.get("status", {}).get("type", {}).get("completed", False)
-
-        scores: dict = {}
-        if home_score is not None and away_score is not None:
-            try:
-                scores = {"home": float(home_score), "away": float(away_score)}
-            except (ValueError, TypeError):
-                pass
-
-        normalised.append({
-            "home": home_name,
-            "away": away_name,
-            "status": "finished" if completed else "scheduled",
-            "scores": scores,
-        })
-
-    return normalised
-
-
-def fetch_scores_for_date(sport_slug: str, date_str: str) -> list[dict]:
-    """Fetch all events (with scores) for a sport slug on a given date via ESPN."""
-    endpoints = ESPN_ENDPOINTS.get(sport_slug, [])
-    if not endpoints:
-        print(f"[resolve_bets] No ESPN coverage for '{sport_slug}' — bets will void")
-        return []
-
-    all_events: list[dict] = []
-    for sport, league in endpoints:
-        events = _fetch_espn_scoreboard(sport, league, date_str)
-        print(
-            f"[resolve_bets] ESPN {sport}/{league} on {date_str}: {len(events)} event(s)"
-        )
-        all_events.extend(events)
-
-    return all_events
-
-
-# ---------------------------------------------------------------------------
-# Score-matching helpers
-# ---------------------------------------------------------------------------
-
-def _normalise(s: str) -> str:
-    return s.strip().lower()
-
-
-def _names_match(a: str, b: str) -> bool:
-    """Loose team-name match: exact after normalisation, or one contains the other."""
-    a_n, b_n = _normalise(a), _normalise(b)
-    return a_n == b_n or a_n in b_n or b_n in a_n
-
-
-def find_score_event(event_name: str, events: list[dict]) -> dict | None:
-    """Find the event whose home + away matches 'Home vs Away' event_name."""
-    lower = event_name.lower()
-    sep = " vs "
-    if sep not in lower:
-        return None
-    idx = lower.index(sep)
-    norm_home = event_name[:idx].strip()
-    norm_away = event_name[idx + len(sep):].strip()
-
-    for event in events:
-        if (
-            _names_match(event.get("home", ""), norm_home)
-            and _names_match(event.get("away", ""), norm_away)
-        ):
-            return event
-    return None
-
-
-def determine_h2h_winner(score_event: dict) -> str | None:
-    """Return winning team name, or None on draw / missing scores."""
-    scores = score_event.get("scores") or {}
-    try:
-        h = float(scores["home"])
-        a = float(scores["away"])
-    except (KeyError, TypeError, ValueError):
-        return None
-
-    if h == a:
-        return None  # draw
-    return score_event["home"] if h > a else score_event["away"]
-
-
-def determine_totals_result(score_event: dict, selection: str) -> str:
-    """Determine won/lost for a totals bet. Selection format: 'Over 5.5'."""
-    parts = selection.strip().split()
-    if len(parts) != 2:
-        return "void"
-    direction = parts[0].lower()
-    try:
-        line = float(parts[1])
-    except ValueError:
-        return "void"
-    if direction not in ("over", "under"):
-        return "void"
-
-    scores = score_event.get("scores") or {}
-    try:
-        total = float(scores["home"]) + float(scores["away"])
-    except (KeyError, TypeError, ValueError):
-        return "void"
-
-    if direction == "over":
-        return "won" if total > line else "lost"
-    return "won" if total < line else "lost"
 
 
 # ---------------------------------------------------------------------------
@@ -248,7 +85,9 @@ def resolve_bet(bet: dict, scores_cache: dict) -> tuple[str, float]:
     cache_key = (sport_slug, bet_date)
 
     if cache_key not in scores_cache:
-        scores_cache[cache_key] = fetch_scores_for_date(sport_slug, bet_date)
+        scores_cache[cache_key] = fetch_scores_for_date(
+            sport_slug, bet_date, log_prefix="[resolve_bets] ESPN"
+        )
 
     events = scores_cache[cache_key]
     score_event = find_score_event(event_name, events)
