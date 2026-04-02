@@ -10,13 +10,20 @@ ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports"
 
 ESPN_ENDPOINTS: dict[str, list[tuple[str, str]]] = {
     "football": [
-        ("soccer", "eng.1"),           # EPL
-        ("soccer", "esp.1"),           # La Liga
-        ("soccer", "ger.1"),           # Bundesliga
-        ("soccer", "ita.1"),           # Serie A
-        ("soccer", "fra.1"),           # Ligue 1
-        ("soccer", "uefa.champions"),  # UCL
-        ("soccer", "uefa.europa"),     # UEL
+        ("soccer", "eng.1"),            # EPL
+        ("soccer", "eng.2"),            # Championship
+        ("soccer", "esp.1"),            # La Liga
+        ("soccer", "ger.1"),            # Bundesliga
+        ("soccer", "ita.1"),            # Serie A
+        ("soccer", "fra.1"),            # Ligue 1
+        ("soccer", "ned.1"),            # Eredivisie
+        ("soccer", "por.1"),            # Primeira Liga
+        ("soccer", "sco.1"),            # Scottish Premiership
+        ("soccer", "tur.1"),            # Süper Lig
+        ("soccer", "usa.1"),            # MLS
+        ("soccer", "uefa.champions"),   # UCL
+        ("soccer", "uefa.europa"),      # UEL
+        ("soccer", "uefa.conference"),  # UECL
     ],
     "basketball": [("basketball", "nba")],
     "baseball": [("baseball", "mlb")],
