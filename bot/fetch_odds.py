@@ -6,6 +6,7 @@ Provides:
 
 import math
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -18,8 +19,14 @@ from bot.espn import ESPN_ENDPOINTS, fetch_scores_for_date, find_score_event
 load_dotenv()
 
 BASE_URL = "https://api.odds-api.io/v3"
-BOOKMAKERS = "1xbet,22Bet"
+BOOKMAKERS = "1xbet,22Bet,bet365,pinnacle,williamhill,unibet,betway,bwin,marathonbet,betfair"
 MULTI_BATCH_SIZE = 10  # /odds/multi supports up to 10 events per call
+
+# Stop fetching odds if quota drops to or below this threshold
+QUOTA_RESERVE = 5
+# Retry settings for 429 responses
+_MAX_RETRIES = 3
+_RETRY_BACKOFF = [5, 15, 30]  # fallback if API doesn't send Retry-After header
 
 IDT = ZoneInfo("Asia/Jerusalem")
 
@@ -34,60 +41,81 @@ SPORTS_WHITELIST = [
 ]
 
 
+def _api_get(url: str, params: dict, label: str) -> requests.Response | None:
+    """GET with retry-on-429 and exponential backoff.
+
+    Returns the Response on success (2xx), None on permanent failure.
+    Raises nothing — all errors are logged and swallowed.
+    """
+    for attempt in range(_MAX_RETRIES):
+        try:
+            resp = requests.get(url, params=params, timeout=30)
+        except requests.RequestException as exc:
+            print(f"[fetch_odds] WARNING — network error ({label}): {exc}")
+            return None
+
+        if resp.status_code == 200:
+            return resp
+
+        if resp.status_code == 429:
+            wait = int(resp.headers.get("Retry-After") or _RETRY_BACKOFF[min(attempt, len(_RETRY_BACKOFF) - 1)])
+            print(f"[fetch_odds] Rate limited ({label}). Waiting {wait}s before retry {attempt + 1}/{_MAX_RETRIES}...")
+            time.sleep(wait)
+            continue
+
+        print(f"[fetch_odds] WARNING — HTTP {resp.status_code} ({label}): {resp.text[:200]}")
+        return None
+
+    print(f"[fetch_odds] WARNING — gave up after {_MAX_RETRIES} retries ({label}).")
+    return None
+
+
+def _remaining_quota(resp: requests.Response) -> int | None:
+    """Parse x-requests-remaining header, return None if missing/unparseable."""
+    raw = resp.headers.get("x-requests-remaining")
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
 def _get_events_for_sport(sport_slug: str, date_from: str, date_to: str) -> list[dict]:
     """GET /events for a sport within a UTC date range."""
-    key = get_api_key()
-    try:
-        resp = requests.get(
-            f"{BASE_URL}/events",
-            params={"apiKey": key, "sport": sport_slug, "from": date_from, "to": date_to},
-            timeout=30,
-        )
-    except requests.RequestException as exc:
-        print(f"[fetch_odds] WARNING — network error for '{sport_slug}': {exc}")
-        return []
-
-    if resp.status_code != 200:
-        print(
-            f"[fetch_odds] WARNING — HTTP {resp.status_code} for events '{sport_slug}': "
-            f"{resp.text[:200]}"
-        )
+    resp = _api_get(
+        f"{BASE_URL}/events",
+        params={"apiKey": get_api_key(), "sport": sport_slug, "from": date_from, "to": date_to},
+        label=f"events/{sport_slug}",
+    )
+    if resp is None:
         return []
 
     events = resp.json()
-    remaining = resp.headers.get("x-requests-remaining", "?")
-    print(f"[fetch_odds] '{sport_slug}': {len(events)} events | quota remaining: {remaining}")
+    remaining = _remaining_quota(resp)
+    print(f"[fetch_odds] '{sport_slug}': {len(events)} events | quota remaining: {remaining if remaining is not None else '?'}")
     return events
 
 
-def _get_odds_batch(event_ids: list[int]) -> list[dict]:
-    """GET /odds/multi for up to 10 events at once."""
-    key = get_api_key()
-    try:
-        resp = requests.get(
-            f"{BASE_URL}/odds/multi",
-            params={
-                "apiKey": key,
-                "eventIds": ",".join(str(i) for i in event_ids),
-                "bookmakers": BOOKMAKERS,
-            },
-            timeout=30,
-        )
-    except requests.RequestException as exc:
-        print(f"[fetch_odds] WARNING — network error for odds/multi batch: {exc}")
-        return []
+def _get_odds_batch(event_ids: list[int]) -> tuple[list[dict], int | None]:
+    """GET /odds/multi for up to 10 events at once.
 
-    if resp.status_code != 200:
-        print(
-            f"[fetch_odds] WARNING — HTTP {resp.status_code} for odds/multi: "
-            f"{resp.text[:200]}"
-        )
-        return []
+    Returns (results, quota_remaining). quota_remaining is None if unknown.
+    """
+    resp = _api_get(
+        f"{BASE_URL}/odds/multi",
+        params={
+            "apiKey": get_api_key(),
+            "eventIds": ",".join(str(i) for i in event_ids),
+            "bookmakers": BOOKMAKERS,
+        },
+        label="odds/multi",
+    )
+    if resp is None:
+        return [], None
 
     data = resp.json()
-    remaining = resp.headers.get("x-requests-remaining", "?")
-    print(f"[fetch_odds] odds/multi ({len(event_ids)} events) | quota remaining: {remaining}")
-    return data if isinstance(data, list) else []
+    remaining = _remaining_quota(resp)
+    print(f"[fetch_odds] odds/multi ({len(event_ids)} events) | quota remaining: {remaining if remaining is not None else '?'}")
+    return (data if isinstance(data, list) else []), remaining
 
 
 def fetch_same_day_odds() -> list[dict]:
@@ -119,19 +147,16 @@ def fetch_same_day_odds() -> list[dict]:
                 sport_slug, today_str, log_prefix="[fetch_odds]"
             )
 
-    # Step 1 — collect qualifying events across all sports
-    qualifying: list[dict] = []
-
-    for sport_slug in SPORTS_WHITELIST:
+    # Step 1 — collect qualifying events across all sports (fetched in parallel)
+    def _fetch_sport(sport_slug: str) -> list[dict]:
         try:
             events = _get_events_for_sport(sport_slug, date_from, date_to)
         except Exception as exc:
             print(f"[fetch_odds] WARNING — skipping '{sport_slug}': {exc}")
-            time.sleep(0.1)
-            continue
+            return []
 
         espn_events = espn_today.get(sport_slug, [])
-
+        qualified = []
         for event in events:
             raw_date = event.get("date", "")
             if not raw_date:
@@ -143,18 +168,20 @@ def fetch_same_day_odds() -> list[dict]:
             commence_idt = commence_utc.astimezone(IDT)
             if not (commence_idt.date() == today_idt and commence_idt <= cutoff_idt):
                 continue
-
-            # Only include events ESPN can resolve — skip anything not in their schedule
             home: str = event.get("home", "")
             away: str = event.get("away", "")
             event_name = f"{home} vs {away}"
             if not find_score_event(event_name, espn_events):
                 print(f"[fetch_odds] Skipping '{event_name}' — not in ESPN coverage")
                 continue
+            qualified.append(event)
+        return qualified
 
-            qualifying.append(event)
-
-        time.sleep(0.1)
+    qualifying: list[dict] = []
+    with ThreadPoolExecutor(max_workers=len(SPORTS_WHITELIST)) as pool:
+        futures = {pool.submit(_fetch_sport, slug): slug for slug in SPORTS_WHITELIST}
+        for future in as_completed(futures):
+            qualifying.extend(future.result())
 
     num_batches = math.ceil(len(qualifying) / MULTI_BATCH_SIZE) if qualifying else 0
     print(
@@ -169,12 +196,20 @@ def fetch_same_day_odds() -> list[dict]:
 
     for i in range(num_batches):
         batch = event_ids[i * MULTI_BATCH_SIZE:(i + 1) * MULTI_BATCH_SIZE]
-        results = _get_odds_batch(batch)
+        results, quota_remaining = _get_odds_batch(batch)
         for item in results:
             eid = item.get("id")
             if eid is not None:
                 odds_by_id[eid] = item.get("bookmakers", {})
-        time.sleep(0.1)
+
+        # Stop early if quota is nearly exhausted
+        if quota_remaining is not None and quota_remaining <= QUOTA_RESERVE:
+            print(
+                f"[fetch_odds] WARNING — quota at {quota_remaining}, stopping early "
+                f"to preserve reserve of {QUOTA_RESERVE}. "
+                f"{num_batches - i - 1} batch(es) skipped."
+            )
+            break
 
     # Step 3 — merge odds back, keep only events that have at least some odds
     all_events: list[dict] = []
