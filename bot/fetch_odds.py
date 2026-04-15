@@ -19,7 +19,7 @@ from bot.espn import ESPN_ENDPOINTS, fetch_scores_for_date, find_score_event
 load_dotenv()
 
 BASE_URL = "https://api.odds-api.io/v3"
-BOOKMAKERS = "1xbet,22Bet,bet365,pinnacle,williamhill,unibet,betway,bwin,marathonbet,betfair"
+BOOKMAKERS = "1xbet,22Bet,pinnacle,williamhill,unibet,betway,bwin,marathonbet,betfair"
 MULTI_BATCH_SIZE = 10  # /odds/multi supports up to 10 events per call
 
 # Stop fetching odds if quota drops to or below this threshold
