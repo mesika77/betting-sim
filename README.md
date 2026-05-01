@@ -24,8 +24,8 @@ Stake $476 on Team A + $476 on Team B = $952 total. Whoever wins pays $1,000. Gu
 
 ```
 GitHub Actions (cron)
-  ├── 8:05 AM UTC  → simulate_bets.py  → detect arbs, write to DB, Telegram alert
-  └── 11:55 PM UTC → resolve_bets.py   → ESPN scores, update P&L, Telegram results
+  ├── 08:05 Israel time → simulate_bets.py  → detect arbs, write to DB, Telegram alert
+  └── 23:55 Israel time → resolve_bets.py   → ESPN scores, update P&L, Telegram results
 
 odds-api.io ──→ fetch_odds.py ──→ select_bets.py ──→ simulate_bets.py
                                                            │
@@ -36,7 +36,7 @@ odds-api.io ──→ fetch_odds.py ──→ select_bets.py ──→ simulate_
 
 ## How it works
 
-### Morning (8:05 AM UTC)
+### Morning (08:05 Israel time)
 1. Fetch same-day events across football, basketball, baseball, ice-hockey from **10 bookmakers** in parallel
 2. For each event/market, find the **best (highest) odds** for each outcome across all bookmakers
 3. Check if `arb_ratio = sum(1/best_odds) < 1.0` → guaranteed profit

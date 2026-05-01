@@ -1,14 +1,17 @@
 """Neon PostgreSQL database client for betting-sim bot."""
 import os
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Generator
+from zoneinfo import ZoneInfo
 
 import psycopg2
 import psycopg2.extras
 from dotenv import load_dotenv
 
 load_dotenv()
+
+IDT = ZoneInfo("Asia/Jerusalem")
 
 
 def _get_connection_string() -> str:
@@ -99,13 +102,18 @@ def insert_bankroll_history(record: dict) -> None:
 
 
 def get_today_bets() -> list[dict]:
-    """Return all bets for today (UTC)."""
-    today = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d")
+    """Return all bets for today in Israel time."""
+    today = datetime.now(tz=IDT).strftime("%Y-%m-%d")
+    return get_bets_for_date(today)
+
+
+def get_bets_for_date(date_str: str) -> list[dict]:
+    """Return all bets for a specific YYYY-MM-DD date."""
     with _get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 "SELECT * FROM bets WHERE date = %s ORDER BY implied_prob DESC",
-                (today,),
+                (date_str,),
             )
             return [dict(row) for row in cur.fetchall()]
 
@@ -143,6 +151,15 @@ def get_bankroll_history() -> list[dict]:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute("SELECT * FROM bankroll_history ORDER BY date ASC")
             return [dict(row) for row in cur.fetchall()]
+
+
+def get_bankroll_history_for_date(date_str: str) -> dict | None:
+    """Return bankroll_history row for a specific YYYY-MM-DD date, if present."""
+    with _get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("SELECT * FROM bankroll_history WHERE date = %s", (date_str,))
+            row = cur.fetchone()
+            return dict(row) if row else None
 
 
 def get_daily_summary() -> list[dict]:

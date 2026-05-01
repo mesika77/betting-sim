@@ -11,7 +11,8 @@ Run every evening at 23:55 IDT by GitHub Actions to:
 6. Print a clear summary to stdout
 """
 
-from datetime import datetime, timezone
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 
@@ -21,6 +22,7 @@ from bot.db import (
     insert_bankroll_history,
     upsert_daily_summary,
     get_latest_bankroll,
+    get_bankroll_history_for_date,
 )
 from bot.espn import (
     fetch_scores_for_date,
@@ -33,6 +35,7 @@ from bot.espn import (
 load_dotenv()
 
 ORIGINAL_BANKROLL = 5000.00
+IDT = ZoneInfo("Asia/Jerusalem")
 
 # Map legacy The Odds API sport keys → slugs (for any old unresolved bets)
 _LEGACY_TO_SLUG: dict[str, str] = {
@@ -147,13 +150,36 @@ def resolve_bet(bet: dict, scores_cache: dict) -> tuple[str, float]:
 
 def main() -> None:
     """Resolve all pending bets and update bankroll records."""
-    today = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d")
-    print(f"[resolve_bets] Starting evening resolution — {today} UTC")
+    today = datetime.now(tz=IDT).strftime("%Y-%m-%d")
+    print(f"[resolve_bets] Starting evening resolution — {today} IDT")
     print("=" * 60)
 
     pending_bets = get_pending_bets()
     if not pending_bets:
-        print("[resolve_bets] No pending bets found. Nothing to resolve. Exiting cleanly.")
+        print("[resolve_bets] No pending bets found.")
+        if get_bankroll_history_for_date(today):
+            print("[resolve_bets] Bankroll history already exists for today. Exiting cleanly.")
+            return
+
+        bankroll = get_latest_bankroll()
+        insert_bankroll_history({
+            "date": today,
+            "opening_balance": bankroll,
+            "closing_balance": bankroll,
+            "daily_pl": 0.0,
+            "total_pl": round(bankroll - ORIGINAL_BANKROLL, 2),
+            "num_bets": 0,
+            "num_won": 0,
+            "num_lost": 0,
+        })
+        upsert_daily_summary({
+            "date": today,
+            "bankroll": bankroll,
+            "daily_pl": 0.0,
+            "win_rate": 0.0,
+            "num_bets": 0,
+        })
+        print("[resolve_bets] Wrote zero-bet bankroll and daily summary records.")
         return
 
     print(f"[resolve_bets] Found {len(pending_bets)} pending bet(s) to resolve.\n")

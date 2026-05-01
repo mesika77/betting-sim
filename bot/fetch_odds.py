@@ -7,7 +7,7 @@ Provides:
 import math
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from datetime import datetime, time, timezone
 from zoneinfo import ZoneInfo
 
 import requests
@@ -130,12 +130,17 @@ def fetch_same_day_odds() -> list[dict]:
     now_idt = datetime.now(tz=IDT)
     today_idt = now_idt.date()
     today_str = today_idt.isoformat()  # "YYYY-MM-DD"
+    start_idt = datetime.combine(today_idt, time.min, tzinfo=IDT)
+    end_idt = datetime.combine(today_idt, time.max, tzinfo=IDT)
     cutoff_idt = datetime(today_idt.year, today_idt.month, today_idt.day, 21, 0, 0, tzinfo=IDT)
 
-    date_from = f"{today_str}T00:00:00Z"
-    date_to = f"{today_str}T23:59:59Z"
+    date_from = start_idt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    date_to = end_idt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    print(f"[fetch_odds] Scanning {len(SPORTS_WHITELIST)} sports for {today_idt} (IDT cutoff: 21:00).")
+    print(
+        f"[fetch_odds] Scanning {len(SPORTS_WHITELIST)} sports for {today_idt} "
+        f"(IDT day: {date_from} to {date_to}, cutoff: 21:00 IDT)."
+    )
 
     # Pre-fetch ESPN schedules for today so we can validate events up-front.
     # This ensures we only bet on games ESPN can resolve in the evening.

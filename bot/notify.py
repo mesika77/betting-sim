@@ -7,7 +7,7 @@ Usage:
 
 import asyncio
 import os
-from datetime import datetime, timezone
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from telegram import Bot
@@ -30,22 +30,14 @@ async def send_message(token: str, chat_id: str, text: str,
 # ── Message builders ──────────────────────────────────────────────────────────
 
 def build_morning_message() -> str:
-    from bot.db import get_latest_bankroll, get_latest_bets
+    from bot.db import get_latest_bankroll, get_bets_for_date
 
     bankroll = get_latest_bankroll()
-    bets = get_latest_bets()
+    now = datetime.now(tz=IDT)
+    today_db = now.strftime("%Y-%m-%d")
+    bets = get_bets_for_date(today_db)
 
-    # Use the actual bet date, not UTC now (avoids midnight timezone mismatch)
-    if bets:
-        raw = str(bets[0].get("date", ""))[:10]
-        try:
-            d = datetime.fromisoformat(raw)
-            today_str = f"{d.strftime('%B')} {d.day}, {d.year}"
-        except ValueError:
-            today_str = raw
-    else:
-        now = datetime.now(tz=IDT)
-        today_str = f"{now.strftime('%B')} {now.day}, {now.year}"
+    today_str = f"{now.strftime('%B')} {now.day}, {now.year}"
     num_bets = len(bets)
 
     # Count distinct sports
@@ -85,6 +77,9 @@ def build_morning_message() -> str:
         lines.append("")
         lines.append("All picks:")
         lines.append(bets_text)
+    else:
+        lines.append("")
+        lines.append("No qualifying arbitrage bets found today.")
 
     lines.append("")
     lines.append("Results tonight at midnight.")
@@ -93,21 +88,14 @@ def build_morning_message() -> str:
 
 
 def build_evening_message() -> str:
-    from bot.db import get_latest_bets, get_bankroll_history
+    from bot.db import get_bets_for_date, get_bankroll_history
 
-    bets = get_latest_bets()
+    now = datetime.now(tz=IDT)
+    today_db = now.strftime("%Y-%m-%d")
+    bets = get_bets_for_date(today_db)
     history = get_bankroll_history()
 
-    if bets:
-        raw = str(bets[0].get("date", ""))[:10]
-        try:
-            d = datetime.fromisoformat(raw)
-            today_str = f"{d.strftime('%B')} {d.day}, {d.year}"
-        except ValueError:
-            today_str = raw
-    else:
-        now = datetime.now(tz=IDT)
-        today_str = f"{now.strftime('%B')} {now.day}, {now.year}"
+    today_str = f"{now.strftime('%B')} {now.day}, {now.year}"
 
     # Derive opening / closing bankroll from history
     opening = 0.0

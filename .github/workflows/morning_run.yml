@@ -2,7 +2,8 @@ name: "Morning — Place Simulated Bets"
 
 on:
   schedule:
-    - cron: '1 21 * * *'
+    # 08:05 Israel daylight time. GitHub Actions cron is UTC.
+    - cron: '5 5 * * *'
   workflow_dispatch:
 
 jobs:
